@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>จัดการข้อมูล Excel</title>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <style>
+    :root { --ink:#172033; --muted:#62708a; --line:#dbe3ef; --brand:#1457d9; --pale:#edf4ff; --good:#0d7a51; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:system-ui,-apple-system,"Noto Sans Thai",sans-serif; background:#f5f7fb; color:var(--ink); }
+    main { max-width:940px; margin:0 auto; padding:48px 22px 68px; }
+    h1 { margin:0 0 8px; font-size:clamp(28px,5vw,42px); letter-spacing:-.04em; }
+    .intro { margin:0 0 30px; color:var(--muted); font-size:17px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:18px; padding:26px; margin:18px 0; box-shadow:0 8px 24px #1b31540a; }
+    h2 { margin:0 0 7px; font-size:20px; } p { color:var(--muted); line-height:1.6; }
+    input[type=file] { display:block; width:100%; margin:19px 0 0; border:1px dashed #9eb4dc; border-radius:11px; padding:16px; background:#f8fbff; }
+    .hidden { display:none; } .filter-list { max-height:230px; overflow:auto; border:1px solid var(--line); border-radius:11px; padding:8px 14px; margin-top:14px; }
+    label.option { display:flex; align-items:center; gap:10px; padding:8px 2px; border-bottom:1px solid #eef2f7; color:#27334a; }
+    label.option:last-child { border:0; }
+    .tools { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:16px; }
+    button { appearance:none; border:0; border-radius:10px; padding:11px 15px; background:var(--brand); color:white; font:inherit; font-weight:650; cursor:pointer; }
+    button.secondary { background:#e9effa; color:#244374; } button:disabled { opacity:.45; cursor:not-allowed; }
+    .status { margin-top:14px; color:var(--good); font-weight:600; }
+    .downloads { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; margin-top:15px; }
+    .download { display:block; text-decoration:none; padding:14px; border:1px solid #cbd9ef; border-radius:12px; color:#164caa; background:var(--pale); font-weight:700; }
+    .download small { display:block; color:#617397; font-weight:400; margin-top:4px; }
+    .note { font-size:14px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>จัดการข้อมูล Excel</h1>
+  <p class="intro">นำเข้าไฟล์ เลือกข้อมูลจากคอลัมน์ 13 แล้วดาวน์โหลดไฟล์ผลลัพธ์ได้ทันที ข้อมูลทั้งหมดทำงานในเบราว์เซอร์ของคุณ</p>
+
+  <section class="card">
+    <h2>1. นำเข้าไฟล์ Excel</h2>
+    <p>รองรับไฟล์ .xlsx, .xls และ .csv โดยจะใช้ชีตแรกของไฟล์</p>
+    <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" />
+    <div id="loaded" class="hidden">
+      <p id="fileInfo" class="status"></p>
+      <h2>2. เลือกรายการในคอลัมน์ 13</h2>
+      <p>เลือกได้มากกว่าหนึ่งรายการ โดยระบบเลือกทุกรายการไว้ให้ตั้งแต่ต้น</p>
+      <div class="tools"><button id="selectAll" class="secondary" type="button">เลือกทั้งหมด</button><button id="clearAll" class="secondary" type="button">ล้างการเลือก</button></div>
+      <div id="filterList" class="filter-list"></div>
+      <div class="tools"><button id="createFiles" type="button">สร้างไฟล์ผลลัพธ์</button></div>
+    </div>
+  </section>
+
+  <section id="result" class="card hidden">
+    <h2>ไฟล์ผลลัพธ์พร้อมดาวน์โหลด</h2>
+    <div id="downloads" class="downloads"></div>
+    <p class="note">ลำดับคอลัมน์ในไฟล์ที่ 1 คงตามต้นฉบับ: 13, 14, 16, 20, 21, 28, 30<br>ไฟล์ที่ 4 ใช้คอลัมน์ลำดับ 6, 2, 4, 5, 7 ของไฟล์ที่ 1 ตัดแถวซ้ำ และเพิ่มคอลัมน์ “ลำดับที่”</p>
+  </section>
+</main>
+<script>
+  const wanted = [12,13,15,19,20,27,29]; // zero-based: source columns 13,14,16,20,21,28,30
+  let rows = [], headers = [], rawFilename = 'ผลลัพธ์';
+  const $ = id => document.getElementById(id);
+  const clean = value => value == null ? '' : String(value).trim();
+  const uniqueRows = data => {
+    const found = new Set();
+    return data.filter(row => { const key = JSON.stringify(row.map(clean)); if (found.has(key)) return false; found.add(key); return true; });
+  };
+  function makeBook(name, header, data, topRows = []) {
+    const ws = XLSX.utils.aoa_to_sheet([...topRows, header, ...data]);
+    ws['!cols'] = header.map((h,i) => ({ wch: Math.min(42, Math.max(12, String(h).length + 3, ...data.slice(0,100).map(r => String(r[i] ?? '').length + 2))) }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'ผลลัพธ์');
+    const out = XLSX.write(wb, { bookType:'xlsx', type:'array' });
+    return new Blob([out], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  }
+  function linkFile(container, label, description, header, data, name, topRows = []) {
+    const a = document.createElement('a'); a.className = 'download'; a.download = name;
+    a.href = URL.createObjectURL(makeBook(name, header, data, topRows));
+    a.innerHTML = `${label}<small>${description} (${data.length.toLocaleString('th-TH')} แถว)</small>`;
+    container.appendChild(a);
+  }
+  $('fileInput').addEventListener('change', async event => {
+    const file = event.target.files[0]; if (!file) return;
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type:'array', cellDates:true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const all = XLSX.utils.sheet_to_json(sheet, { header:1, defval:'', raw:false });
+      if (all.length < 2) throw new Error('ไม่พบข้อมูลอย่างน้อย 2 แถว');
+      headers = all[0]; rows = all.slice(1).filter(r => r.some(v => clean(v) !== ''));
+      if (headers.length < 30) throw new Error('ไฟล์ต้องมีอย่างน้อย 30 คอลัมน์');
+      rawFilename = file.name.replace(/\.[^.]+$/, '');
+      const values = [...new Set(rows.map(r => clean(r[12])))].sort((a,b) => a.localeCompare(b,'th'));
+      $('filterList').innerHTML = values.map((value,i) => `<label class="option"><input type="checkbox" value="${escapeHtml(value)}" checked><span>${escapeHtml(value || '(ค่าว่าง)')}</span></label>`).join('');
+      $('fileInfo').textContent = `อ่าน ${file.name} แล้ว: ${rows.length.toLocaleString('th-TH')} แถว, พบ ${values.length.toLocaleString('th-TH')} รายการในคอลัมน์ 13`;
+      $('loaded').classList.remove('hidden'); $('result').classList.add('hidden');
+    } catch (error) { alert('ไม่สามารถอ่านไฟล์ได้: ' + error.message); }
+  });
+  function escapeHtml(text) { const div=document.createElement('div'); div.textContent=text; return div.innerHTML; }
+  function dateValue(value) {
+    const text = clean(value);
+    const iso = /^([0-9]{4})[-/]([0-9]{1,2})[-/]([0-9]{1,2})/.exec(text);
+    const thai = /^([0-9]{1,2})[-/]([0-9]{1,2})[-/]([0-9]{2,4})/.exec(text);
+    let year, month, day;
+    if (iso) [, year, month, day] = iso;
+    else if (thai) { [, day, month, year] = thai; if (year.length === 2) year = `20${year}`; }
+    else return Number.NaN;
+    return Date.UTC(Number(year), Number(month) - 1, Number(day));
+  }
+  function filenamePart(value) { return String(value).replace(/[\\\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim(); }
+  $('selectAll').onclick = () => document.querySelectorAll('#filterList input').forEach(x => x.checked = true);
+  $('clearAll').onclick = () => document.querySelectorAll('#filterList input').forEach(x => x.checked = false);
+  $('createFiles').onclick = () => {
+    const selected = new Set([...document.querySelectorAll('#filterList input:checked')].map(x => x.value));
+    const filtered = rows.filter(r => selected.has(clean(r[12])));
+    const outHeader = wanted.map(i => headers[i] || `คอลัมน์ ${i+1}`);
+    const extract = filtered.map(r => wanted.map(i => r[i] ?? ''));
+    const deduped = uniqueRows(extract);
+    const countMap = new Map();
+    deduped.forEach(r => { const key = clean(r[2]); countMap.set(key, (countMap.get(key)||0)+1); });
+    const counts = [...countMap.entries()].sort((a,b) => String(a[0]).localeCompare(String(b[0]), 'th')).map(([v,n]) => [v,n]);
+    const reducedIdx = [5,1,3,4,6];
+    const reduced = uniqueRows(extract.map(r => reducedIdx.map(i => r[i] ?? '')))
+      .map((row, index) => [index + 1, ...row]);
+    const datedRows = extract.map(r => ({ display: clean(r[1]), value: dateValue(r[1]) }))
+      .filter(item => !Number.isNaN(item.value)).sort((a,b) => a.value - b.value);
+    const dateRange = datedRows.length ? `${datedRows[0].display} - ${datedRows[datedRows.length - 1].display}` : 'ไม่พบวันที่';
+    const machines = [...selected].map(value => value || '(ค่าว่าง)').join(', ');
+    const selectedForFilename = filenamePart(machines) || 'ไม่ระบุรายการ';
+    const serviceTitle = `รายชื่อผู้รับบริการ ตรวจด้วยเครื่อง ${machines} ตั้งแต่วันที่ในคอลัมที่ 2 ${dateRange}`;
+    const box = $('downloads'); box.innerHTML = '';
+    linkFile(box, '1. ข้อมูลที่กรองแล้ว', 'คอลัมน์ 13, 14, 16, 20, 21, 28, 30', outHeader, extract, `${rawFilename}_ข้อมูลที่กรอง.xlsx`);
+    linkFile(box, '2. ข้อมูลไม่ซ้ำ', 'ตัดแถวที่ซ้ำกันออก', outHeader, deduped, `${rawFilename}_ข้อมูลไม่ซ้ำ.xlsx`);
+    linkFile(box, '3. สรุปจำนวนคอลัมน์ 16', 'นับจากข้อมูลไม่ซ้ำ', [outHeader[2], 'จำนวน'], counts, `${rawFilename}_${selectedForFilename} สรุปจำนวนราย.xlsx`);
+    linkFile(box, '4. ชุดคอลัมน์ 6, 2, 4, 5, 7', 'ตัดแถวซ้ำและเพิ่มลำดับที่', ['ลำดับที่', 'วันที่', 'Lab number', 'HN', 'รายชื่อ', 'รายการตรวจ'], reduced, `${rawFilename}_${selectedForFilename} รายชื่อผู้รับบริการ.xlsx`, [[serviceTitle]]);
+    $('result').classList.remove('hidden'); $('result').scrollIntoView({behavior:'smooth', block:'start'});
+  };
+</script>
+</body>
+</html>
